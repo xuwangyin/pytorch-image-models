@@ -444,6 +444,9 @@ class ResNet(nn.Module):
             drop_block_rate: float = 0.,
             zero_init_last: bool = True,
             block_args: Optional[Dict[str, Any]] = None,
+            normalize_input: bool = True,
+            normalization_type: str = 'restrictedimagenet',
+            use_batchnorm: bool = False,
     ):
         """
         Args:
@@ -482,6 +485,16 @@ class ResNet(nn.Module):
         self.drop_rate = drop_rate
         self.grad_checkpointing = False
 
+        self.normalize_input = normalize_input
+        self.normalization_type = normalization_type
+        self.use_batchnorm = use_batchnorm
+        print('=='*10)
+        print('use timm')
+        print(f'normalize_input: {self.normalize_input}')
+        print(f'normalization_type: {self.normalization_type}')
+        print(f'use_batchnorm: {self.use_batchnorm}')
+        print('=='*10)
+        
         act_layer = get_act_layer(act_layer)
         norm_layer = get_norm_layer(norm_layer)
 
@@ -719,11 +732,45 @@ class ResNet(nn.Module):
             x = F.dropout(x, p=float(self.drop_rate), training=self.training)
         return x if pre_logits else self.fc(x)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass."""
+    def forward(self, x: torch.Tensor, y=None) -> torch.Tensor:
+        if self.normalize_input:
+            if self.normalization_type == 'imagenet':
+                # Standard ImageNet normalization
+                # https://github.com/MadryLab/robustness/blob/a9541241defd9972e9334bfcdb804f6aefe24dc7/robustness/datasets.py#L195
+                mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=x.dtype,
+                                    device=x.device)
+                std = torch.as_tensor([0.229, 0.224, 0.225], dtype=x.dtype,
+                                    device=x.device)
+            elif self.normalization_type == 'restrictedimagenet':
+                # Restricted ImageNet normalization
+                # https://github.com/M4xim4l/InNOutRobustness/blob/d81d1d26e5ebc9193009e3d92bd67b5e01d6cfd6/utils/model_normalization.py#L58
+                mean = torch.as_tensor([0.4717, 0.4499, 0.3837], dtype=x.dtype,
+                                    device=x.device)
+                std = torch.as_tensor([0.2600, 0.2516, 0.2575], dtype=x.dtype,
+                                    device=x.device)
+            else:
+                raise ValueError(f"Unknown normalization_type: {self.normalization_type}. Must be 'imagenet' or 'restrictedimagenet'")
+            x = (x - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
         x = self.forward_features(x)
         x = self.forward_head(x)
-        return x
+        if y is None:
+            return x
+        return x[torch.arange(x.size(0)), y]
+
+    def train(self, mode=True):
+        """
+        Override the train method to optionally keep BatchNorm layers in evaluation mode.
+
+        Args:
+            mode (bool): Whether to set training mode for the model
+        """
+        super(ResNet, self).train(mode)
+        if mode and not self.use_batchnorm:
+            # Set all BatchNorm layers to eval mode even when the model is in training mode
+            for submodule in self.modules():
+                if 'batchnorm' in submodule.__class__.__name__.lower():
+                    submodule.train(False)
+        return self
 
 
 def _create_resnet(variant: str, pretrained: bool = False, **kwargs) -> ResNet:
@@ -1622,6 +1669,18 @@ def wide_resnet50_2(pretrained: bool = False, **kwargs) -> ResNet:
     """
     model_args = dict(block=Bottleneck, layers=(3, 4, 6, 3), base_width=128)
     return _create_resnet('wide_resnet50_2', pretrained, **dict(model_args, **kwargs))
+
+
+@register_model
+def wide_resnet50_4(pretrained: bool = False, **kwargs) -> ResNet:
+    """Constructs a Wide ResNet-50-4 model.
+    The model is the same as ResNet except for the bottleneck number of channels
+    which is four times larger in every block. The number of channels in outer 1x1
+    convolutions is the same, e.g. last block in ResNet-50 has 2048-512-2048
+    channels, and in Wide ResNet-50-4 has 2048-2048-2048.
+    """
+    model_args = dict(block=Bottleneck, layers=(3, 4, 6, 3), base_width=256)
+    return _create_resnet('wide_resnet50_4', pretrained, **dict(model_args, **kwargs))
 
 
 @register_model
