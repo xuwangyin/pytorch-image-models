@@ -26,7 +26,7 @@ try:
 except ImportError:
     from typing_extensions import Literal
 
-from timm import __version__
+from timm.version import __version__
 from timm.models._pretrained import filter_pretrained_cfg
 
 try:

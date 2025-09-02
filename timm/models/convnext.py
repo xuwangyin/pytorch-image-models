@@ -324,6 +324,8 @@ class ConvNeXt(nn.Module):
             norm_eps: Optional[float] = None,
             drop_rate: float = 0.,
             drop_path_rate: float = 0.,
+            normalize_input: bool = True,
+            use_layernorm: bool = True,
     ):
         """
         Args:
@@ -347,6 +349,8 @@ class ConvNeXt(nn.Module):
             norm_layer: Normalization layer type.
             drop_rate: Head pre-classifier dropout rate.
             drop_path_rate: Stochastic depth drop rate.
+            normalize_input: Apply input normalization with ImageNet statistics.
+            use_layernorm: Keep LayerNorm layers in training mode during training.
         """
         super().__init__()
         assert output_stride in (8, 16, 32)
@@ -357,6 +361,14 @@ class ConvNeXt(nn.Module):
         self.num_classes = num_classes
         self.drop_rate = drop_rate
         self.feature_info = []
+
+        self.normalize_input = normalize_input
+        self.use_layernorm = use_layernorm
+        print('=='*10)
+        print('use timm ConvNeXt')
+        print(f'normalize_input: {self.normalize_input}')
+        print(f'use_layernorm: {self.use_layernorm}')
+        print('=='*10)
 
         assert stem_type in ('patch', 'overlap', 'overlap_tiered', 'overlap_act')
         if stem_type == 'patch':
@@ -575,11 +587,34 @@ class ConvNeXt(nn.Module):
         """
         return self.head(x, pre_logits=True) if pre_logits else self.head(x)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass."""
+    def forward(self, x: torch.Tensor, y=None) -> torch.Tensor:
+        if self.normalize_input:
+            # Standard ImageNet normalization
+            mean = torch.as_tensor([0.485, 0.456, 0.406], dtype=x.dtype,
+                                device=x.device)
+            std = torch.as_tensor([0.229, 0.224, 0.225], dtype=x.dtype,
+                                device=x.device)
+            x = (x - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
         x = self.forward_features(x)
         x = self.forward_head(x)
-        return x
+        if y is None:
+            return x
+        return x[torch.arange(x.size(0)), y]
+
+    def train(self, mode=True):
+        """
+        Override the train method to optionally keep LayerNorm layers in evaluation mode.
+
+        Args:
+            mode (bool): Whether to set training mode for the model
+        """
+        super(ConvNeXt, self).train(mode)
+        if mode and not self.use_layernorm:
+            # Set all LayerNorm layers to eval mode even when the model is in training mode
+            for submodule in self.modules():
+                if 'layernorm' in submodule.__class__.__name__.lower():
+                    submodule.train(False)
+        return self
 
 
 def _init_weights(module: nn.Module, name: Optional[str] = None, head_init_scale: float = 1.0) -> None:
