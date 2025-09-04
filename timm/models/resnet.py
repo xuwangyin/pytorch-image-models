@@ -445,7 +445,7 @@ class ResNet(nn.Module):
             zero_init_last: bool = True,
             block_args: Optional[Dict[str, Any]] = None,
             normalize_input: bool = True,
-            normalization_type: str = 'restrictedimagenet',
+            normalization_type: str = 'imagenet',
             use_batchnorm: bool = False,
     ):
         """
